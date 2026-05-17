@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, MessageSquare } from 'lucide-react';
 import BanterMessage from './BanterMessage';
 import { BanterMessage as BanterMessageType, Player } from '@/lib/types';
 
@@ -12,11 +11,11 @@ interface BanterSectionProps {
   currentPlayerId?: string;
 }
 
-export default function BanterSection({ 
-  messages, 
-  players, 
+export default function BanterSection({
+  messages,
+  players,
   onSendMessage,
-  currentPlayerId = 'demo-player-you'
+  currentPlayerId = 'demo-player-you',
 }: BanterSectionProps) {
   const [inputValue, setInputValue] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
@@ -50,7 +49,7 @@ export default function BanterSection({
         className="w-full px-5 py-3.5 border-b border-zinc-800/80 flex items-center justify-between hover:bg-zinc-800/30 transition-colors"
       >
         <div className="flex items-center gap-2">
-          <MessageSquare className="w-4 h-4 text-zinc-400" />
+          <span className="text-base">💬</span>
           <span className="text-xs text-zinc-400 font-bold uppercase tracking-widest">
             Banter
           </span>
@@ -68,7 +67,7 @@ export default function BanterSection({
       {/* Messages */}
       {isExpanded && (
         <div className="border-b border-zinc-800/80">
-          <div className="max-h-96 overflow-y-auto">
+          <div className="max-h-80 overflow-y-auto">
             {messages.length === 0 ? (
               <div className="text-center text-zinc-500 text-sm py-8 px-4">
                 No banter yet. Start the trash talk! 💬
@@ -108,9 +107,9 @@ export default function BanterSection({
           <button
             type="submit"
             disabled={!inputValue.trim()}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg transition-colors text-sm font-bold"
           >
-            <Send className="w-4 h-4" />
+            Send
           </button>
         </form>
       )}

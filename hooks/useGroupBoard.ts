@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Group, Submission, Score } from '@/lib/types';
-import { fetchSubmissions, pushSubmission, clearSubmissions } from '@/lib/submissionsApi';
+import { Group, Submission, Score, BanterMessage, Player } from '@/lib/types';
+import { fetchSubmissions, pushSubmission, clearSubmissions, fetchBanter, pushBanter } from '@/lib/submissionsApi';
 
 function getTodayDate(): string {
   const d = new Date();
@@ -13,23 +13,34 @@ function localHistoryKey(groupId: string) {
   return `tb_hist_${groupId}`;
 }
 
+export interface ScoreNotification {
+  id: string;
+  player: Player;
+  score: Score;
+  message?: string;
+}
+
 interface GroupBoardState {
   submitScore: (playerId: string, score: Score) => void;
   getTodaySubmissions: () => Submission[];
   getPlayerHistory: (playerId: string, days: number) => Array<{ date: string; score: Score | null }>;
   resetBoard: () => void;
   hydrated: boolean;
+  banterMessages: BanterMessage[];
+  sendBanter: (playerId: string, message: string, hasScore?: boolean) => void;
+  notification: ScoreNotification | null;
+  clearNotification: () => void;
 }
 
 export function useGroupBoard(group: Group): GroupBoardState {
-  // Today's submissions come from the server (shared across all devices)
   const [todaySubs, setTodaySubs] = useState<Submission[]>([]);
-  // History (past days) stays in localStorage per device
   const [historySubs, setHistorySubs] = useState<Submission[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [banterMessages, setBanterMessages] = useState<BanterMessage[]>([]);
+  const [notification, setNotification] = useState<ScoreNotification | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevSubsRef = useRef<Submission[]>([]);
 
-  // Load history from localStorage
   useEffect(() => {
     try {
       const raw = localStorage.getItem(localHistoryKey(group.id));
@@ -37,36 +48,51 @@ export function useGroupBoard(group: Group): GroupBoardState {
     } catch { /* ignore */ }
   }, [group.id]);
 
-  // Fetch today's submissions from server
   const syncFromServer = useCallback(async () => {
-    const subs = await fetchSubmissions(group.id, getTodayDate());
-    setTodaySubs(subs);
-  }, [group.id]);
+    const [subs, msgs] = await Promise.all([
+      fetchSubmissions(group.id, getTodayDate()),
+      fetchBanter(group.id, getTodayDate()),
+    ]);
 
-  // Initial fetch + mark hydrated
+    // Detect new submissions for toast notifications
+    const prev = prevSubsRef.current;
+    if (prev.length > 0) {
+      const newSubs = subs.filter(s => !prev.find(p => p.playerId === s.playerId));
+      if (newSubs.length > 0) {
+        const newest = newSubs[0];
+        const player = group.players.find(p => p.id === newest.playerId);
+        if (player) {
+          setNotification({ id: `${newest.playerId}:${newest.submittedAt}`, player, score: newest.score });
+        }
+      }
+    }
+    prevSubsRef.current = subs;
+
+    setTodaySubs(subs);
+    setBanterMessages(msgs);
+  }, [group.id, group.players]);
+
   useEffect(() => {
     syncFromServer().finally(() => setHydrated(true));
   }, [syncFromServer]);
 
-  // Poll every 8s so everyone sees each other's scores in near real-time
   useEffect(() => {
     pollRef.current = setInterval(syncFromServer, 8000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [syncFromServer]);
 
   const submitScore = useCallback(async (playerId: string, score: Score) => {
     const date = getTodayDate();
     const sub: Submission = { playerId, date, score, submittedAt: new Date().toISOString() };
 
-    // Optimistic local update so UI feels instant
-    setTodaySubs(prev => [...prev.filter(s => s.playerId !== playerId), sub]);
+    setTodaySubs(prev => {
+      const updated = [...prev.filter(s => s.playerId !== playerId), sub];
+      prevSubsRef.current = updated;
+      return updated;
+    });
 
-    // Push to server so other players see it
     await pushSubmission(group.id, sub);
 
-    // Fire-and-forget SMS to group members
     const updatedSubs = [...todaySubs.filter(s => s.playerId !== playerId), sub];
     const isLast = group.players.every(p => updatedSubs.some(s => s.playerId === p.id));
     const player = group.players.find(p => p.id === playerId);
@@ -85,13 +111,27 @@ export function useGroupBoard(group: Group): GroupBoardState {
       }),
     }).catch(() => {});
 
-    // Save to local history for the 7-day dots
     setHistorySubs(prev => {
       const updated = [...prev.filter(s => !(s.playerId === playerId && s.date === date)), sub];
       try { localStorage.setItem(localHistoryKey(group.id), JSON.stringify(updated)); } catch { /* ignore */ }
       return updated;
     });
+  }, [group.id, group.players, todaySubs]);
+
+  const sendBanter = useCallback((playerId: string, message: string, hasScore = false) => {
+    const date = getTodayDate();
+    const msg: BanterMessage = {
+      id: `${playerId}:${Date.now()}`,
+      playerId,
+      message,
+      timestamp: new Date().toISOString(),
+      hasScore,
+    };
+    setBanterMessages(prev => [...prev, msg]);
+    pushBanter(group.id, date, msg).catch(() => {});
   }, [group.id]);
+
+  const clearNotification = useCallback(() => setNotification(null), []);
 
   const getTodaySubmissions = useCallback(() => todaySubs, [todaySubs]);
 
@@ -114,14 +154,24 @@ export function useGroupBoard(group: Group): GroupBoardState {
 
   const resetBoard = useCallback(async () => {
     const date = getTodayDate();
+    prevSubsRef.current = [];
     setTodaySubs([]);
     await clearSubmissions(group.id, date);
-    // Clear local history too
     try {
       localStorage.removeItem(localHistoryKey(group.id));
       setHistorySubs([]);
     } catch { /* ignore */ }
   }, [group.id]);
 
-  return { submitScore, getTodaySubmissions, getPlayerHistory, resetBoard, hydrated };
+  return {
+    submitScore,
+    getTodaySubmissions,
+    getPlayerHistory,
+    resetBoard,
+    hydrated,
+    banterMessages,
+    sendBanter,
+    notification,
+    clearNotification,
+  };
 }

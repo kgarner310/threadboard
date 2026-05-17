@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { decodeGroup } from '@/lib/groupConfig';
 import { useGroupBoard } from '@/hooks/useGroupBoard';
@@ -13,8 +13,9 @@ import ProgressStatus from '@/components/ProgressStatus';
 import WaitingOnBanner from '@/components/WaitingOnBanner';
 import BoardCard from '@/components/BoardCard';
 import SmsSignupInput from '@/components/SmsSignupInput';
+import BanterSection from '@/components/BanterSection';
+import ScoreNotification from '@/components/ScoreNotification';
 
-// Split into two components so hooks aren't called conditionally
 export default function GroupBoardPage() {
   const params = useParams();
   const config = params.config as string;
@@ -39,11 +40,27 @@ export default function GroupBoardPage() {
 }
 
 function GroupBoard({ group }: { group: Group }) {
-  const { submitScore, getTodaySubmissions, getPlayerHistory, resetBoard, hydrated } = useGroupBoard(group);
+  const {
+    submitScore,
+    getTodaySubmissions,
+    getPlayerHistory,
+    resetBoard,
+    hydrated,
+    banterMessages,
+    sendBanter,
+    notification,
+    clearNotification,
+  } = useGroupBoard(group);
+
+  const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
 
   const todaySubmissions = getTodaySubmissions();
-  const today = useMemo(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }, []);
+
+  const today = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }, []);
 
   const allSubmitted = group.players.every(p =>
     todaySubmissions.some(s => s.playerId === p.id)
@@ -67,6 +84,12 @@ function GroupBoard({ group }: { group: Group }) {
     } catch { /* ignore */ }
   };
 
+  const handleSubmit = useCallback((playerId: string, score: Score, banter?: string) => {
+    submitScore(playerId, score);
+    if (banter) sendBanter(playerId, banter, true);
+    setActivePlayerId(playerId);
+  }, [submitScore, sendBanter]);
+
   const displayDate = new Date().toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric',
   });
@@ -82,6 +105,8 @@ function GroupBoard({ group }: { group: Group }) {
   return (
     <div className="min-h-screen bg-zinc-950">
       <Header showBack backHref="/" backLabel="Home" title={group.name} />
+
+      <ScoreNotification notification={notification} onDismiss={clearNotification} />
 
       <main className="max-w-lg mx-auto px-4 py-6 space-y-4">
         {/* Share link banner */}
@@ -134,7 +159,7 @@ function GroupBoard({ group }: { group: Group }) {
                 key={player.id}
                 player={player}
                 submission={submission}
-                onSubmit={(score: Score) => submitScore(player.id, score)}
+                onSubmit={(score, banter) => handleSubmit(player.id, score, banter)}
                 boardComplete={allSubmitted}
                 history={history}
                 submissionOrder={submissionOrder.get(player.id)}
@@ -142,6 +167,14 @@ function GroupBoard({ group }: { group: Group }) {
             );
           })}
         </div>
+
+        {/* Banter section */}
+        <BanterSection
+          messages={banterMessages}
+          players={group.players}
+          onSendMessage={sendBanter}
+          currentPlayerId={activePlayerId ?? group.players[0]?.id}
+        />
 
         <div className="text-center pt-4 pb-8">
           <button

@@ -1,4 +1,4 @@
-import { Submission } from './types';
+import { Submission, BanterMessage } from './types';
 
 export async function fetchSubmissions(groupId: string, date: string): Promise<Submission[]> {
   try {
@@ -32,5 +32,29 @@ export async function clearSubmissions(groupId: string, date: string): Promise<v
     );
   } catch {
     // ignore
+  }
+}
+
+export async function fetchBanter(groupId: string, date: string): Promise<BanterMessage[]> {
+  try {
+    const res = await fetch(
+      `/api/banter?groupId=${encodeURIComponent(groupId)}&date=${encodeURIComponent(date)}`
+    );
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
+}
+
+export async function pushBanter(groupId: string, date: string, message: BanterMessage): Promise<void> {
+  try {
+    await fetch('/api/banter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId, date, message }),
+    });
+  } catch {
+    // Fire and forget
   }
 }

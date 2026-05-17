@@ -1,9 +1,9 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import { AppState, Submission, Score } from '@/lib/types';
+import { AppState, Submission, Score, BanterMessage, Player } from '@/lib/types';
 import { DEMO_GROUP, SEED_SUBMISSIONS } from '@/lib/seed';
-import { fetchSubmissions, pushSubmission, clearSubmissions } from '@/lib/submissionsApi';
+import { fetchSubmissions, pushSubmission, clearSubmissions, fetchBanter, pushBanter } from '@/lib/submissionsApi';
 
 const STORAGE_KEY = 'threadboard_v1';
 const DEMO_GROUP_ID = DEMO_GROUP.id;
@@ -17,6 +17,13 @@ function getInitialState(): AppState {
   return { group: DEMO_GROUP, submissions: SEED_SUBMISSIONS };
 }
 
+export interface ScoreNotification {
+  id: string;
+  player: Player;
+  score: Score;
+  message?: string;
+}
+
 interface StoreContextValue {
   state: AppState;
   hydrated: boolean;
@@ -24,18 +31,23 @@ interface StoreContextValue {
   resetDemo: () => void;
   getTodaySubmissions: () => Submission[];
   getPlayerHistory: (playerId: string, days: number) => Array<{ date: string; score: Score | null }>;
+  banterMessages: BanterMessage[];
+  sendBanter: (playerId: string, message: string, hasScore?: boolean) => void;
+  notification: ScoreNotification | null;
+  clearNotification: () => void;
 }
 
 const StoreContext = createContext<StoreContextValue | null>(null);
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(getInitialState);
-  // Today's submissions from server (shared across devices)
   const [todaySubs, setTodaySubs] = useState<Submission[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [banterMessages, setBanterMessages] = useState<BanterMessage[]>([]);
+  const [notification, setNotification] = useState<ScoreNotification | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevSubsRef = useRef<Submission[]>([]);
 
-  // Hydrate streaks from localStorage, then fetch today's subs from server
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -51,16 +63,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
     } catch { /* corrupt storage — start fresh */ }
 
-    // Fetch today from server
-    fetchSubmissions(DEMO_GROUP_ID, getTodayDate())
-      .then(subs => setTodaySubs(subs))
-      .finally(() => setHydrated(true));
+    Promise.all([
+      fetchSubmissions(DEMO_GROUP_ID, getTodayDate()),
+      fetchBanter(DEMO_GROUP_ID, getTodayDate()),
+    ]).then(([subs, msgs]) => {
+      prevSubsRef.current = subs;
+      setTodaySubs(subs);
+      setBanterMessages(msgs);
+    }).finally(() => setHydrated(true));
   }, []);
 
-  // Poll every 8s to pick up other players' scores
   const syncFromServer = useCallback(async () => {
-    const subs = await fetchSubmissions(DEMO_GROUP_ID, getTodayDate());
+    const [subs, msgs] = await Promise.all([
+      fetchSubmissions(DEMO_GROUP_ID, getTodayDate()),
+      fetchBanter(DEMO_GROUP_ID, getTodayDate()),
+    ]);
+
+    const prev = prevSubsRef.current;
+    if (prev.length > 0) {
+      const newSubs = subs.filter(s => !prev.find(p => p.playerId === s.playerId));
+      if (newSubs.length > 0) {
+        const newest = newSubs[0];
+        const player = DEMO_GROUP.players.find(p => p.id === newest.playerId);
+        if (player) {
+          setNotification({ id: `${newest.playerId}:${newest.submittedAt}`, player, score: newest.score });
+        }
+      }
+    }
+    prevSubsRef.current = subs;
+
     setTodaySubs(subs);
+    setBanterMessages(msgs);
   }, []);
 
   useEffect(() => {
@@ -68,7 +101,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [syncFromServer]);
 
-  // Persist streak/history to localStorage
   useEffect(() => {
     if (!hydrated) return;
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore */ }
@@ -78,8 +110,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const date = getTodayDate();
     const sub: Submission = { playerId, date, score, submittedAt: new Date().toISOString() };
 
-    // Optimistic update + streak
-    setTodaySubs(prev => [...prev.filter(s => s.playerId !== playerId), sub]);
+    setTodaySubs(prev => {
+      const updated = [...prev.filter(s => s.playerId !== playerId), sub];
+      prevSubsRef.current = updated;
+      return updated;
+    });
     setState(prev => ({
       group: { ...prev.group, players: prev.group.players.map(p =>
         p.id !== playerId ? p : { ...p, streak: score === 'DNP' ? 0 : p.streak + 1 }
@@ -87,18 +122,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       submissions: [...prev.submissions.filter(s => !(s.playerId === playerId && s.date === date)), sub],
     }));
 
-    // Push to server
     await pushSubmission(DEMO_GROUP_ID, sub);
   }, []);
 
+  const sendBanter = useCallback((playerId: string, message: string, hasScore = false) => {
+    const date = getTodayDate();
+    const msg: BanterMessage = {
+      id: `${playerId}:${Date.now()}`,
+      playerId,
+      message,
+      timestamp: new Date().toISOString(),
+      hasScore,
+    };
+    setBanterMessages(prev => [...prev, msg]);
+    pushBanter(DEMO_GROUP_ID, date, msg).catch(() => {});
+  }, []);
+
+  const clearNotification = useCallback(() => setNotification(null), []);
+
   const resetDemo = useCallback(async () => {
+    prevSubsRef.current = [];
     setState(getInitialState());
     setTodaySubs([]);
     try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     await clearSubmissions(DEMO_GROUP_ID, getTodayDate());
   }, []);
 
-  // Merge: server subs for today, localStorage for past days
   const getTodaySubmissions = useCallback(() => todaySubs, [todaySubs]);
 
   const getPlayerHistory = useCallback(
@@ -119,7 +168,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <StoreContext.Provider value={{ state, hydrated, submitScore, resetDemo, getTodaySubmissions, getPlayerHistory }}>
+    <StoreContext.Provider value={{
+      state,
+      hydrated,
+      submitScore,
+      resetDemo,
+      getTodaySubmissions,
+      getPlayerHistory,
+      banterMessages,
+      sendBanter,
+      notification,
+      clearNotification,
+    }}>
       {children}
     </StoreContext.Provider>
   );
