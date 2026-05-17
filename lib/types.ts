@@ -41,3 +41,11 @@ export interface AppState {
   group: Group;
   submissions: Submission[];
 }
+
+export interface BanterMessage {
+  id: string;
+  playerId: string;
+  message: string;
+  timestamp: string; // ISO timestamp
+  hasScore?: boolean; // true if message was posted with a score submission
+}
