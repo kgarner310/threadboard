@@ -7,7 +7,6 @@ import ProgressStatus from '@/components/ProgressStatus';
 import WaitingOnBanner from '@/components/WaitingOnBanner';
 import BoardCard from '@/components/BoardCard';
 import ResetButton from '@/components/ResetButton';
-import SmsSignupInput from '@/components/SmsSignupInput';
 import BanterSection from '@/components/BanterSection';
 import ScoreNotification from '@/components/ScoreNotification';
 import { useStore } from '@/context/StoreContext';
@@ -78,7 +77,6 @@ export default function TodayPage() {
 
       <main className="max-w-lg mx-auto px-4 py-6 space-y-4">
         <ProgressStatus submitted={todaySubmissions.length} total={group.players.length} />
-        <SmsSignupInput groupId="demo-family" />
 
         {!allSubmitted && todaySubmissions.length > 0 && (
           <WaitingOnBanner waitingPlayers={waitingPlayers} />
